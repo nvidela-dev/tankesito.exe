@@ -1,8 +1,28 @@
 import * as THREE from 'three'
 import RAPIER from '@dimforge/rapier3d'
 
+// Level data - obstacles defined as simple objects
+const LEVEL_1 = {
+  spawn: { x: -8, y: 1, z: 0 },
+  obstacles: [
+    // Ramp to launch off
+    { type: 'box', position: { x: -5, y: 0.3, z: 0 }, size: { x: 2, y: 0.3, z: 2 }, rotation: { z: -0.2 }, color: 0x8B4513 },
+    // Floating platforms
+    { type: 'box', position: { x: 0, y: 2, z: 0 }, size: { x: 2, y: 0.3, z: 2 }, color: 0x8B4513 },
+    { type: 'box', position: { x: 4, y: 3, z: -1 }, size: { x: 1.5, y: 0.3, z: 1.5 }, color: 0x8B4513 },
+    // Bouncy wall
+    { type: 'box', position: { x: 6, y: 1.5, z: 0 }, size: { x: 0.3, y: 3, z: 3 }, color: 0xff6b6b, bouncy: true },
+    // Steps
+    { type: 'box', position: { x: -2, y: 0.5, z: 3 }, size: { x: 1, y: 0.5, z: 1 }, color: 0x696969 },
+    { type: 'box', position: { x: -1, y: 1, z: 3 }, size: { x: 1, y: 1, z: 1 }, color: 0x696969 },
+    { type: 'box', position: { x: 0, y: 1.5, z: 3 }, size: { x: 1, y: 1.5, z: 1 }, color: 0x696969 },
+  ],
+}
+
+// Current level
+const currentLevel = LEVEL_1
+
 // Game state
-const SPAWN_POINT = { x: 0, y: 1, z: 0 }
 let isDragging = false
 let isLaunched = false
 let dragStart = new THREE.Vector2()
@@ -23,8 +43,8 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   1000
 )
-camera.position.set(0, 5, 10)
-camera.lookAt(0, 0, 0)
+camera.position.set(0, 8, 15)
+camera.lookAt(0, 2, 0)
 
 // Renderer
 const renderer = new THREE.WebGLRenderer({ antialias: true })
@@ -42,6 +62,10 @@ directionalLight.position.set(5, 10, 5)
 directionalLight.castShadow = true
 directionalLight.shadow.mapSize.width = 2048
 directionalLight.shadow.mapSize.height = 2048
+directionalLight.shadow.camera.left = -20
+directionalLight.shadow.camera.right = 20
+directionalLight.shadow.camera.top = 20
+directionalLight.shadow.camera.bottom = -20
 scene.add(directionalLight)
 
 // Character (placeholder - chubby kid with backpack)
@@ -73,18 +97,19 @@ const rightStripe = new THREE.Mesh(stripeGeometry, stripeMaterial)
 rightStripe.position.set(0.15, 0, -0.45)
 character.add(rightStripe)
 
-character.position.set(SPAWN_POINT.x, SPAWN_POINT.y, SPAWN_POINT.z)
+const spawnPoint = currentLevel.spawn
+character.position.set(spawnPoint.x, spawnPoint.y, spawnPoint.z)
 scene.add(character)
 
 // Character physics (dynamic ball)
 const characterBodyDesc = RAPIER.RigidBodyDesc.dynamic()
-  .setTranslation(SPAWN_POINT.x, SPAWN_POINT.y, SPAWN_POINT.z)
-  .setLinearDamping(0.5)
-  .setAngularDamping(0.5)
+  .setTranslation(spawnPoint.x, spawnPoint.y, spawnPoint.z)
+  .setLinearDamping(0.3)
+  .setAngularDamping(0.3)
 const characterBody = world.createRigidBody(characterBodyDesc)
 
 const characterColliderDesc = RAPIER.ColliderDesc.ball(0.6)
-  .setRestitution(0.7) // Bouncy!
+  .setRestitution(0.7)
   .setFriction(0.5)
 world.createCollider(characterColliderDesc, characterBody)
 
@@ -109,6 +134,42 @@ const groundBody = world.createRigidBody(groundBodyDesc)
 const groundColliderDesc = RAPIER.ColliderDesc.cuboid(25, 0.1, 25)
   .setTranslation(0, -0.1, 0)
 world.createCollider(groundColliderDesc, groundBody)
+
+// Spawn level obstacles
+function spawnObstacles(level) {
+  level.obstacles.forEach((obs) => {
+    if (obs.type === 'box') {
+      // Three.js mesh
+      const geometry = new THREE.BoxGeometry(obs.size.x * 2, obs.size.y * 2, obs.size.z * 2)
+      const material = new THREE.MeshStandardMaterial({ color: obs.color || 0x888888 })
+      const mesh = new THREE.Mesh(geometry, material)
+      mesh.position.set(obs.position.x, obs.position.y, obs.position.z)
+      if (obs.rotation) {
+        mesh.rotation.set(obs.rotation.x || 0, obs.rotation.y || 0, obs.rotation.z || 0)
+      }
+      mesh.castShadow = true
+      mesh.receiveShadow = true
+      scene.add(mesh)
+
+      // Rapier physics
+      const bodyDesc = RAPIER.RigidBodyDesc.fixed()
+        .setTranslation(obs.position.x, obs.position.y, obs.position.z)
+      if (obs.rotation) {
+        const euler = new THREE.Euler(obs.rotation.x || 0, obs.rotation.y || 0, obs.rotation.z || 0)
+        const quat = new THREE.Quaternion().setFromEuler(euler)
+        bodyDesc.setRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w })
+      }
+      const rigidBody = world.createRigidBody(bodyDesc)
+
+      const colliderDesc = RAPIER.ColliderDesc.cuboid(obs.size.x, obs.size.y, obs.size.z)
+        .setRestitution(obs.bouncy ? 1.2 : 0.3)
+        .setFriction(obs.bouncy ? 0.1 : 0.5)
+      world.createCollider(colliderDesc, rigidBody)
+    }
+  })
+}
+
+spawnObstacles(currentLevel)
 
 // Aim line
 const aimLineMaterial = new THREE.LineBasicMaterial({ color: 0xff0000, linewidth: 2 })
@@ -137,7 +198,7 @@ function updateAimLine() {
   }
 
   const launchVec = screenToLaunchVector(dragStart.x, dragStart.y, dragEnd.x, dragEnd.y)
-  const charPos = new THREE.Vector3(SPAWN_POINT.x, SPAWN_POINT.y, SPAWN_POINT.z)
+  const charPos = new THREE.Vector3(spawnPoint.x, spawnPoint.y, spawnPoint.z)
 
   // Show trajectory hint
   const points = []
@@ -167,12 +228,12 @@ function launch() {
 // Reset character to spawn
 function reset() {
   characterBody.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased)
-  characterBody.setTranslation(SPAWN_POINT)
+  characterBody.setTranslation(spawnPoint)
   characterBody.setRotation({ x: 0, y: 0, z: 0, w: 1 })
   characterBody.setLinvel({ x: 0, y: 0, z: 0 })
   characterBody.setAngvel({ x: 0, y: 0, z: 0 })
 
-  character.position.set(SPAWN_POINT.x, SPAWN_POINT.y, SPAWN_POINT.z)
+  character.position.set(spawnPoint.x, spawnPoint.y, spawnPoint.z)
   character.quaternion.set(0, 0, 0, 1)
 
   isLaunched = false
