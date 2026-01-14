@@ -1,6 +1,13 @@
 import * as THREE from 'three'
 import RAPIER from '@dimforge/rapier3d'
 
+// Game state
+const SPAWN_POINT = { x: 0, y: 1, z: 0 }
+let isDragging = false
+let isLaunched = false
+let dragStart = new THREE.Vector2()
+let dragEnd = new THREE.Vector2()
+
 // Physics world
 const gravity = { x: 0, y: -9.81, z: 0 }
 const world = new RAPIER.World(gravity)
@@ -66,12 +73,12 @@ const rightStripe = new THREE.Mesh(stripeGeometry, stripeMaterial)
 rightStripe.position.set(0.15, 0, -0.45)
 character.add(rightStripe)
 
-character.position.set(0, 3, 0) // Start higher so we can see it fall
+character.position.set(SPAWN_POINT.x, SPAWN_POINT.y, SPAWN_POINT.z)
 scene.add(character)
 
 // Character physics (dynamic ball)
 const characterBodyDesc = RAPIER.RigidBodyDesc.dynamic()
-  .setTranslation(0, 3, 0)
+  .setTranslation(SPAWN_POINT.x, SPAWN_POINT.y, SPAWN_POINT.z)
   .setLinearDamping(0.5)
   .setAngularDamping(0.5)
 const characterBody = world.createRigidBody(characterBodyDesc)
@@ -80,6 +87,9 @@ const characterColliderDesc = RAPIER.ColliderDesc.ball(0.6)
   .setRestitution(0.7) // Bouncy!
   .setFriction(0.5)
 world.createCollider(characterColliderDesc, characterBody)
+
+// Start with character asleep (no physics until launched)
+characterBody.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased)
 
 // Ground
 const groundGeometry = new THREE.PlaneGeometry(50, 50)
@@ -99,6 +109,104 @@ const groundBody = world.createRigidBody(groundBodyDesc)
 const groundColliderDesc = RAPIER.ColliderDesc.cuboid(25, 0.1, 25)
   .setTranslation(0, -0.1, 0)
 world.createCollider(groundColliderDesc, groundBody)
+
+// Aim line
+const aimLineMaterial = new THREE.LineBasicMaterial({ color: 0xff0000, linewidth: 2 })
+const aimLineGeometry = new THREE.BufferGeometry()
+const aimLine = new THREE.Line(aimLineGeometry, aimLineMaterial)
+aimLine.visible = false
+scene.add(aimLine)
+
+// Helper to convert screen coords to world direction
+function screenToLaunchVector(startX, startY, endX, endY) {
+  const dx = startX - endX
+  const dy = startY - endY
+
+  // Scale the drag distance to launch power
+  const power = Math.min(Math.sqrt(dx * dx + dy * dy) * 0.05, 20)
+
+  // Convert 2D drag to 3D launch vector (pull back = launch forward)
+  return new THREE.Vector3(dx * 0.05, dy * 0.05 + power * 0.5, -power * 0.3)
+}
+
+// Update aim line visualization
+function updateAimLine() {
+  if (!isDragging) {
+    aimLine.visible = false
+    return
+  }
+
+  const launchVec = screenToLaunchVector(dragStart.x, dragStart.y, dragEnd.x, dragEnd.y)
+  const charPos = new THREE.Vector3(SPAWN_POINT.x, SPAWN_POINT.y, SPAWN_POINT.z)
+
+  // Show trajectory hint
+  const points = []
+  points.push(charPos)
+  points.push(charPos.clone().add(launchVec.clone().multiplyScalar(0.5)))
+
+  aimLineGeometry.setFromPoints(points)
+  aimLine.visible = true
+}
+
+// Launch the character
+function launch() {
+  if (isLaunched) return
+
+  const launchVec = screenToLaunchVector(dragStart.x, dragStart.y, dragEnd.x, dragEnd.y)
+
+  // Make character dynamic again
+  characterBody.setBodyType(RAPIER.RigidBodyType.Dynamic)
+
+  // Apply impulse
+  characterBody.applyImpulse({ x: launchVec.x * 2, y: launchVec.y * 2, z: launchVec.z * 2 }, true)
+
+  isLaunched = true
+  aimLine.visible = false
+}
+
+// Reset character to spawn
+function reset() {
+  characterBody.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased)
+  characterBody.setTranslation(SPAWN_POINT)
+  characterBody.setRotation({ x: 0, y: 0, z: 0, w: 1 })
+  characterBody.setLinvel({ x: 0, y: 0, z: 0 })
+  characterBody.setAngvel({ x: 0, y: 0, z: 0 })
+
+  character.position.set(SPAWN_POINT.x, SPAWN_POINT.y, SPAWN_POINT.z)
+  character.quaternion.set(0, 0, 0, 1)
+
+  isLaunched = false
+  isDragging = false
+  aimLine.visible = false
+}
+
+// Mouse/touch events
+renderer.domElement.addEventListener('mousedown', (e) => {
+  if (isLaunched) return
+  isDragging = true
+  dragStart.set(e.clientX, e.clientY)
+  dragEnd.set(e.clientX, e.clientY)
+})
+
+renderer.domElement.addEventListener('mousemove', (e) => {
+  if (!isDragging) return
+  dragEnd.set(e.clientX, e.clientY)
+  updateAimLine()
+})
+
+renderer.domElement.addEventListener('mouseup', () => {
+  if (isDragging && !isLaunched) {
+    launch()
+  }
+  isDragging = false
+})
+
+// Keyboard controls
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'r' || e.key === 'R') {
+    reset()
+  }
+})
 
 // Handle window resize
 window.addEventListener('resize', () => {
